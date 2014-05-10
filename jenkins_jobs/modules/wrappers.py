@@ -20,15 +20,6 @@ Wrappers can alter the way the build is run as well as the build output.
   :Macro: wrapper
   :Entry Point: jenkins_jobs.wrappers
 
-Example::
-
-  job:
-    name: test_job
-
-    wrappers:
-      - timeout:
-          timeout: 90
-          fail: true
 """
 
 import xml.etree.ElementTree as XML
@@ -60,7 +51,7 @@ def ci_skip(parser, xml_parent, data):
     obj = XML.SubElement(robj, 'object', {
         'ruby-class': 'CiSkipWrapper', 'pluginid': 'ci-skip'
     })
-    ciskip = XML.SubElement(obj, 'ci__skip', {
+    XML.SubElement(obj, 'ci__skip', {
         'pluginid': 'ci-skip', 'ruby-class': 'NilClass'
     })
 
@@ -75,6 +66,8 @@ def timeout(parser, xml_parent, data):
     :arg bool write-description: Write a message in the description
         (default false)
     :arg int timeout: Abort the build after this number of minutes (default 3)
+    :arg str timeout-var: Export an environment variable to reference the
+        timeout value (optional)
     :arg str type: Timeout type to use (default absolute)
     :arg int elastic-percentage: Percentage of the three most recent builds
         where to declare a timeout (default 0)
@@ -86,33 +79,22 @@ def timeout(parser, xml_parent, data):
      * **elastic**
      * **absolute**
 
+    Example:
 
-    Example::
+    .. literalinclude:: /../../tests/wrappers/fixtures/timeout001.yaml
 
-      wrappers:
-        - timeout:
-            timeout: 90
-            fail: true
-            type: absolute
+    .. literalinclude:: /../../tests/wrappers/fixtures/timeout002.yaml
 
-      wrappers:
-        - timeout:
-            fail: false
-            type: likely-stuck
-
-      wrappers:
-        - timeout:
-            fail: true
-            elastic-percentage: 150
-            elastic-default-timeout: 90
-            type: elastic
-
+    .. literalinclude:: /../../tests/wrappers/fixtures/timeout003.yaml
     """
     twrapper = XML.SubElement(xml_parent,
                               'hudson.plugins.build__timeout.'
                               'BuildTimeoutWrapper')
     XML.SubElement(twrapper, 'timeoutMinutes').text = str(
         data.get('timeout', 3))
+    timeout_env_var = data.get('timeout-var')
+    if timeout_env_var:
+        XML.SubElement(twrapper, 'timeoutEnvVar').text = str(timeout_env_var)
     XML.SubElement(twrapper, 'failBuild').text = str(
         data.get('fail', 'false')).lower()
     XML.SubElement(twrapper, 'writingDescription').text = str(
@@ -349,7 +331,7 @@ def rbenv(parser, xml_parent, data):
     XML.SubElement(o,
                    'ignore__local__version',
                    {'ruby-class': ignore_local_class,
-                   'pluginid': 'rbenv'})
+                    'pluginid': 'rbenv'})
 
 
 def build_name(parser, xml_parent, data):
@@ -774,7 +756,7 @@ def sauce_ondemand(parser, xml_parent, data):
         XML.SubElement(info, 'isWebDriver').text = 'false'
         XML.SubElement(sauce, 'seleniumBrowsers',
                        {'reference': '../seleniumInformation/'
-                       'seleniumBrowsers'})
+                        'seleniumBrowsers'})
     if atype == 'webdriver':
         browsers = XML.SubElement(info, 'webDriverBrowsers')
         for platform in data['platforms']:
@@ -782,7 +764,7 @@ def sauce_ondemand(parser, xml_parent, data):
         XML.SubElement(info, 'isWebDriver').text = 'true'
         XML.SubElement(sauce, 'webDriverBrowsers',
                        {'reference': '../seleniumInformation/'
-                       'webDriverBrowsers'})
+                        'webDriverBrowsers'})
     XML.SubElement(sauce, 'launchSauceConnectOnSlave').text = str(data.get(
         'launch-sauce-connect-on-slave', False)).lower()
     protocol = data.get('https-protocol', '')
@@ -861,6 +843,140 @@ def pre_scm_buildstep(parser, xml_parent, data):
     for step in data:
         for edited_node in create_builders(parser, step):
             bs.append(edited_node)
+
+
+def logstash(parser, xml_parent, data):
+    """yaml: logstash build wrapper
+    Dump the Jenkins console output to Logstash
+    Requires the Jenkins `logstash plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Logstash+Plugin>`_
+
+    :arg use-redis: Boolean to use Redis. (default: true)
+    :arg redis: Redis config params
+
+        :Parameter: * **host** (`str`) Redis hostname\
+        (default 'localhost')
+        :Parameter: * **port** (`int`) Redis port number (default 6397)
+        :Parameter: * **database-number** (`int`)\
+        Redis database number (default 0)
+        :Parameter: * **database-password** (`str`)\
+        Redis database password (default '')
+        :Parameter: * **data-type** (`str`)\
+        Redis database type (default 'list')
+        :Parameter: * **key** (`str`) Redis key (default 'logstash')
+
+    Example:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/logstash001.yaml
+
+    """
+    logstash = XML.SubElement(xml_parent,
+                              'jenkins.plugins.logstash.'
+                              'LogstashBuildWrapper')
+    logstash.set('plugin', 'logstash@0.8.0')
+
+    redis_bool = XML.SubElement(logstash, 'useRedis')
+    redis_bool.text = str(data.get('use-redis', True)).lower()
+
+    if data.get('use-redis'):
+        redis_config = data.get('redis', {})
+        redis_sub_element = XML.SubElement(logstash, 'redis')
+
+        host_sub_element = XML.SubElement(redis_sub_element, 'host')
+        host_sub_element.text = str(
+            redis_config.get('host', 'localhost'))
+
+        port_sub_element = XML.SubElement(redis_sub_element, 'port')
+        port_sub_element.text = str(redis_config.get('port', '6379'))
+
+        database_numb_sub_element = XML.SubElement(redis_sub_element, 'numb')
+        database_numb_sub_element.text = \
+            str(redis_config.get('database-number', '0'))
+
+        database_pass_sub_element = XML.SubElement(redis_sub_element, 'pass')
+        database_pass_sub_element.text = \
+            str(redis_config.get('database-password', ''))
+
+        data_type_sub_element = XML.SubElement(redis_sub_element, 'dataType')
+        data_type_sub_element.text = \
+            str(redis_config.get('data-type', 'list'))
+
+        key_sub_element = XML.SubElement(redis_sub_element, 'key')
+        key_sub_element.text = str(redis_config.get('key', 'logstash'))
+
+
+def delivery_pipeline(parser, xml_parent, data):
+    """yaml: delivery-pipeline
+    If enabled the job will create a version based on the template.
+    The version will be set to the environment variable PIPELINE_VERSION and
+    will also be set in the downstream jobs.
+
+    Requires the Jenkins `Delivery Pipeline Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Delivery+Pipeline+Plugin>`_
+
+    :arg str version-template: Template for generated version e.g
+        1.0.${BUILD_NUMBER} (default: '')
+    :arg bool set-display-name: Set the generated version as the display name
+        for the build (default: false)
+
+    Example:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/delivery-pipeline1.yaml
+
+    """
+    pvc = XML.SubElement(xml_parent,
+                         'se.diabol.jenkins.pipeline.'
+                         'PipelineVersionContributor')
+    XML.SubElement(pvc, 'versionTemplate').text = data.get(
+        'version-template', '')
+    XML.SubElement(pvc, 'updateDisplayName').text = str(data.get(
+        'set-display-name', False)).lower()
+
+
+def matrix_tie_parent(parser, xml_parent, data):
+    """yaml: matrix-tie-parent
+    Tie parent to a node.
+    Requires the Jenkins `Matrix Tie Parent Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Matrix+Tie+Parent+Plugin>`_
+    Note that from Jenkins version 1.532 this plugin's functionality is
+    available under the "advanced" option of the matrix project configuration.
+
+    :arg str node: Name of the node.
+
+    Example:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/matrix-tie-parent.yaml
+    """
+    mtp = XML.SubElement(xml_parent, 'matrixtieparent.BuildWrapperMtp')
+    XML.SubElement(mtp, 'labelName').text = data['node']
+
+
+def exclusion(parser, xml_parent, data):
+    """yaml: exclusion
+    Add a resource to use for critical sections to establish a mutex on. If
+    another job specifies the same resource, the second job will wait for the
+    blocked resource to become available.
+
+    Requires the Jenkins `Exclusion Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Exclusion-Plugin>`_
+
+    :arg list resources: List of resources to add for exclusion
+
+    Example:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/exclusion002.yaml
+
+    """
+    exl = XML.SubElement(xml_parent,
+                         'org.jvnet.hudson.plugins.exclusion.IdAllocator')
+    exl.set('plugin', 'Exclusion')
+    ids = XML.SubElement(exl, 'ids')
+    resources = data.get('resources', [])
+    for resource in resources:
+        dit = \
+            XML.SubElement(ids,
+                           'org.jvnet.hudson.plugins.exclusion.DefaultIdType')
+        XML.SubElement(dit, 'name').text = str(resource).upper()
 
 
 class Wrappers(jenkins_jobs.modules.base.Base):

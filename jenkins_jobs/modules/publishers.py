@@ -1,5 +1,7 @@
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
 # Copyright 2012 Varnish Software AS
+# Copyright 2013-2014 Antoine "hashar" Musso
+# Copyright 2013-2014 Wikimedia Foundation Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +28,7 @@ the build is complete.
 
 import xml.etree.ElementTree as XML
 import jenkins_jobs.modules.base
+from jenkins_jobs.modules import hudson_model
 from jenkins_jobs.errors import JenkinsJobsException
 import logging
 import sys
@@ -89,6 +92,51 @@ def blame_upstream(parser, xml_parent, data):
     XML.SubElement(xml_parent,
                    'hudson.plugins.blame__upstream__commiters.'
                    'BlameUpstreamCommitersPublisher')
+
+
+def campfire(parser, xml_parent, data):
+    """yaml: campfire
+    Send build notifications to Campfire rooms.
+    Requires the Jenkins `Campfire Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Campfire+Plugin>`_
+
+    Campfire notifications global default values must be configured for
+    the Jenkins instance. Default values will be used if no specific
+    values are specified for each job, so all config params are optional.
+
+    :arg str subdomain: override the default campfire subdomain
+    :arg str token: override the default API token
+    :arg bool ssl: override the default 'use SSL'
+    :arg str room: override the default room name
+
+    Example:
+
+    .. literalinclude::  /../../tests/publishers/fixtures/campfire001.yaml
+
+    """
+
+    root = XML.SubElement(xml_parent,
+                          'hudson.plugins.campfire.'
+                          'CampfireNotifier')
+
+    campfire = XML.SubElement(root, 'campfire')
+
+    if ('subdomain' in data and data['subdomain']):
+        subdomain = XML.SubElement(campfire, 'subdomain')
+        subdomain.text = data['subdomain']
+    if ('token' in data and data['token']):
+        token = XML.SubElement(campfire, 'token')
+        token.text = data['token']
+    if ('ssl' in data):
+        ssl = XML.SubElement(campfire, 'ssl')
+        ssl.text = str(data['ssl']).lower()
+
+    if ('room' in data and data['room']):
+        room = XML.SubElement(root, 'room')
+        name = XML.SubElement(room, 'name')
+        name.text = data['room']
+
+        XML.SubElement(room, 'campfire reference="../../campfire"')
 
 
 def emotional_jenkins(parser, xml_parent, data):
@@ -216,42 +264,97 @@ def trigger(parser, xml_parent, data):
     :arg str threshold: when to trigger the other job (default 'SUCCESS'),
       alternatives: SUCCESS, UNSTABLE, FAILURE
 
-    Example::
+    Example:
 
-      publishers:
-        - trigger:
-            project: other_job
+    .. literalinclude:: /../../tests/publishers/fixtures/trigger_success.yaml
     """
-    thresholds = {
-        'SUCCESS': {
-            'ordinal': '0',
-            'color': 'BLUE'
-        },
-        'UNSTABLE': {
-            'ordinal': '1',
-            'color': 'YELLOW'
-        },
-        'FAILURE': {
-            'ordinal': '2',
-            'color': 'RED'
-        }
-    }
-
     tconfig = XML.SubElement(xml_parent, 'hudson.tasks.BuildTrigger')
     childProjects = XML.SubElement(tconfig, 'childProjects')
     childProjects.text = data['project']
     tthreshold = XML.SubElement(tconfig, 'threshold')
 
     threshold = data.get('threshold', 'SUCCESS')
-    if threshold not in thresholds.keys():
+    supported_thresholds = ['SUCCESS', 'UNSTABLE', 'FAILURE']
+    if threshold not in supported_thresholds:
         raise JenkinsJobsException("threshold must be one of %s" %
-                                   ", ".join(threshold.keys()))
+                                   ", ".join(supported_thresholds))
     tname = XML.SubElement(tthreshold, 'name')
-    tname.text = threshold
+    tname.text = hudson_model.THRESHOLDS[threshold]['name']
     tordinal = XML.SubElement(tthreshold, 'ordinal')
-    tordinal.text = thresholds[threshold]['ordinal']
+    tordinal.text = hudson_model.THRESHOLDS[threshold]['ordinal']
     tcolor = XML.SubElement(tthreshold, 'color')
-    tcolor.text = thresholds[threshold]['color']
+    tcolor.text = hudson_model.THRESHOLDS[threshold]['color']
+
+
+def clone_workspace(parser, xml_parent, data):
+    """yaml: clone-workspace
+    Archive the workspace from builds of one project and reuse them as the SCM
+    source for another project.
+    Requires the Jenkins `Clone Workspace SCM Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Clone+Workspace+SCM+Plugin>`_
+
+    :arg str workspace-glob: Files to include in cloned workspace
+    :arg str workspace-exclude-glob: Files to exclude from cloned workspace
+    :arg str criteria: Criteria for build to be archived.  Can be 'any',
+        'not failed', or 'successful'. (default: any )
+    :arg str archive-method: Choose the method to use for archiving the
+        workspace.  Can be 'tar' or 'zip'.  (default: tar)
+    :arg bool override-default-excludes: Override default ant excludes.
+        (default: false)
+
+    Minimal example:
+
+    .. literalinclude::
+      /../../tests/publishers/fixtures/clone-workspace001.yaml
+
+    Full example:
+
+    .. literalinclude::
+      /../../tests/publishers/fixtures/clone-workspace002.yaml
+
+    """
+
+    cloneworkspace = XML.SubElement(
+        xml_parent,
+        'hudson.plugins.cloneworkspace.CloneWorkspacePublisher',
+        {'plugin': 'clone-workspace-scm'})
+
+    XML.SubElement(
+        cloneworkspace,
+        'workspaceGlob').text = data.get('workspace-glob', None)
+
+    if 'workspace-exclude-glob' in data:
+        XML.SubElement(
+            cloneworkspace,
+            'workspaceExcludeGlob').text = data['workspace-exclude-glob']
+
+    criteria_list = ['Any', 'Not Failed', 'Successful']
+
+    criteria = data.get('criteria', 'Any').title()
+
+    if 'criteria' in data and criteria not in criteria_list:
+        raise JenkinsJobsException(
+            'clone-workspace criteria must be one of: '
+            + ', '.join(criteria_list))
+    else:
+        XML.SubElement(cloneworkspace, 'criteria').text = criteria
+
+    archive_list = ['TAR', 'ZIP']
+
+    archive_method = data.get('archive-method', 'TAR').upper()
+
+    if 'archive-method' in data and archive_method not in archive_list:
+        raise JenkinsJobsException(
+            'clone-workspace archive-method must be one of: '
+            + ', '.join(archive_list))
+    else:
+        XML.SubElement(cloneworkspace, 'archiveMethod').text = archive_method
+
+    override_default_excludes_str = str(
+        data.get('override-default-excludes', False)).lower()
+    override_default_excludes_elem = XML.SubElement(
+        cloneworkspace, 'overrideDefaultExcludes')
+    override_default_excludes_elem.text = override_default_excludes_str
 
 
 def cloverphp(parser, xml_parent, data):
@@ -636,7 +739,7 @@ def ftp(parser, xml_parent, data):
     :arg bool target-is-date-format: whether target is a date format. If true,
       raw text should be quoted (defaults to False)
     :arg bool clean-remote: should the remote directory be deleted before
-      transfering files (defaults to False)
+      transferring files (defaults to False)
     :arg str source: source path specifier
     :arg str excludes: excluded file pattern (optional)
     :arg str remove-prefix: prefix to remove from uploaded file paths
@@ -959,36 +1062,23 @@ def checkstyle(parser, xml_parent, data):
     :arg str defaultEncoding: encoding for parsing or showing files
      (empty will use platform default)
 
-    Example::
+    Example:
 
-      publishers:
-        - checkstyle:
-            pattern: '**/checkstyle-result.xml'
-            healthy: 0
-            unHealthy: 100
-            healthThreshold: 'high'
-            thresholds:
-                unstable:
-                    totalHigh: 10
-                failed:
-                    totalHigh: 1
+    .. literalinclude::  /../../tests/publishers/fixtures/checkstyle001.yaml
+
+    Full example:
+
+    .. literalinclude::  /../../tests/publishers/fixtures/checkstyle002.yaml
+
     """
     checkstyle = XML.SubElement(xml_parent,
                                 'hudson.plugins.checkstyle.'
                                 'CheckStylePublisher')
 
-    dval = data.get('healthy', None)
-    if dval:
-        XML.SubElement(checkstyle, 'healthy').text = str(dval)
-    else:
-        XML.SubElement(checkstyle, 'healthy')
-
-    dval = data.get('unHealthy', None)
-    if dval:
-        XML.SubElement(checkstyle, 'unHealthy').text = str(dval)
-    else:
-        XML.SubElement(checkstyle, 'unHealthy')
-
+    XML.SubElement(checkstyle, 'healthy').text = str(
+        data.get('healthy', ''))
+    XML.SubElement(checkstyle, 'unHealthy').text = str(
+        data.get('unHealthy', ''))
     XML.SubElement(checkstyle, 'thresholdLimit').text = \
         data.get('healthThreshold', 'low')
 
@@ -997,10 +1087,8 @@ def checkstyle(parser, xml_parent, data):
     XML.SubElement(checkstyle, 'defaultEncoding').text = \
         data.get('defaultEncoding', '')
 
-    if data.get('canRunOnFailed', False):
-        XML.SubElement(checkstyle, 'canRunOnFailed').text = 'true'
-    else:
-        XML.SubElement(checkstyle, 'canRunOnFailed').text = 'false'
+    XML.SubElement(checkstyle, 'canRunOnFailed').text = str(
+        data.get('canRunOnFailed', False)).lower()
 
     XML.SubElement(checkstyle, 'useStableBuildAsReference').text = 'false'
 
@@ -1011,58 +1099,26 @@ def checkstyle(parser, xml_parent, data):
     dfailed = dthresholds.get('failed', {})
     thresholds = XML.SubElement(checkstyle, 'thresholds')
 
-    dval = dunstable.get('totalAll', None)
-    if dval:
-        XML.SubElement(thresholds, 'unstableTotalAll').text = str(dval)
-    else:
-        XML.SubElement(thresholds, 'unstableTotalAll')
+    XML.SubElement(thresholds, 'unstableTotalAll').text = str(
+        dunstable.get('totalAll', ''))
+    XML.SubElement(thresholds, 'unstableTotalHigh').text = str(
+        dunstable.get('totalHigh', ''))
+    XML.SubElement(thresholds, 'unstableTotalNormal').text = str(
+        dunstable.get('totalNormal', ''))
+    XML.SubElement(thresholds, 'unstableTotalLow').text = str(
+        dunstable.get('totalLow', ''))
 
-    dval = dunstable.get('totalHigh', None)
-    if dval:
-        XML.SubElement(thresholds, 'unstableTotalHigh').text = str(dval)
-    else:
-        XML.SubElement(thresholds, 'unstableTotalHigh')
+    XML.SubElement(thresholds, 'failedTotalAll').text = str(
+        dfailed.get('totalAll', ''))
+    XML.SubElement(thresholds, 'failedTotalHigh').text = str(
+        dfailed.get('totalHigh', ''))
+    XML.SubElement(thresholds, 'failedTotalNormal').text = str(
+        dfailed.get('totalNormal', ''))
+    XML.SubElement(thresholds, 'failedTotalLow').text = str(
+        dfailed.get('totalLow', ''))
 
-    dval = dunstable.get('totalNormal', None)
-    if dval:
-        XML.SubElement(thresholds, 'unstableTotalNormal').text = str(dval)
-    else:
-        XML.SubElement(thresholds, 'unstableTotalNormal')
-
-    dval = dunstable.get('totalLow', None)
-    if dval:
-        XML.SubElement(thresholds, 'unstableTotalLow').text = str(dval)
-    else:
-        XML.SubElement(thresholds, 'unstableTotalLow')
-
-    dval = dfailed.get('totalAll', None)
-    if dval:
-        XML.SubElement(thresholds, 'failedTotalAll').text = str(dval)
-    else:
-        XML.SubElement(thresholds, 'failedTotalAll')
-
-    dval = dfailed.get('totalHigh', None)
-    if dval:
-        XML.SubElement(thresholds, 'failedTotalHigh').text = str(dval)
-    else:
-        XML.SubElement(thresholds, 'failedTotalHigh')
-
-    dval = dfailed.get('totalNormal', None)
-    if dval:
-        XML.SubElement(thresholds, 'failedTotalNormal').text = str(dval)
-    else:
-        XML.SubElement(thresholds, 'failedTotalNormal')
-
-    dval = dfailed.get('totalLow', None)
-    if dval:
-        XML.SubElement(thresholds, 'failedTotalLow').text = str(dval)
-    else:
-        XML.SubElement(thresholds, 'failedTotalLow')
-
-    if data.get('shouldDetectModules', False):
-        XML.SubElement(checkstyle, 'shouldDetectModules').text = 'true'
-    else:
-        XML.SubElement(checkstyle, 'shouldDetectModules').text = 'false'
+    XML.SubElement(checkstyle, 'shouldDetectModules').text = \
+        str(data.get('shouldDetectModules', False)).lower()
 
     XML.SubElement(checkstyle, 'dontComputeNew').text = 'true'
 
@@ -1125,7 +1181,7 @@ def ssh(parser, xml_parent, data):
     :arg bool target-is-date-format: whether target is a date format. If true,
       raw text should be quoted (defaults to False)
     :arg bool clean-remote: should the remote directory be deleted before
-      transfering files (defaults to False)
+      transferring files (defaults to False)
     :arg str source: source path specifier
     :arg str command: a command to execute on the remote server (optional)
     :arg int timeout: timeout in milliseconds for the Exec command (optional)
@@ -1266,10 +1322,20 @@ def base_email_ext(parser, xml_parent, data, ttype):
     XML.SubElement(email, 'recipientList').text = ''
     XML.SubElement(email, 'subject').text = '$PROJECT_DEFAULT_SUBJECT'
     XML.SubElement(email, 'body').text = '$PROJECT_DEFAULT_CONTENT'
-    XML.SubElement(email, 'sendToDevelopers').text = 'false'
-    XML.SubElement(email, 'sendToRequester').text = 'false'
-    XML.SubElement(email, 'includeCulprits').text = 'false'
-    XML.SubElement(email, 'sendToRecipientList').text = 'true'
+    if 'send-to' in data:
+        XML.SubElement(email, 'sendToDevelopers').text = \
+            str('developers' in data['send-to']).lower()
+        XML.SubElement(email, 'sendToRequester').text = \
+            str('requester' in data['send-to']).lower()
+        XML.SubElement(email, 'includeCulprits').text = \
+            str('culprits' in data['send-to']).lower()
+        XML.SubElement(email, 'sendToRecipientList').text = \
+            str('recipients' in data['send-to']).lower()
+    else:
+        XML.SubElement(email, 'sendToRequester').text = 'false'
+        XML.SubElement(email, 'sendToDevelopers').text = 'false'
+        XML.SubElement(email, 'includeCulprits').text = 'false'
+        XML.SubElement(email, 'sendToRecipientList').text = 'true'
 
 
 def email_ext(parser, xml_parent, data):
@@ -1281,12 +1347,17 @@ def email_ext(parser, xml_parent, data):
     :arg str recipients: Comma separated list of emails
     :arg str reply-to: Comma separated list of emails that should be in
         the Reply-To header for this project (default is $DEFAULT_RECIPIENTS)
+    :arg str content-type: The content type of the emails sent. If not set, the
+        Jenkins plugin uses the value set on the main configuration page.
+        Possible values: 'html', 'text' or 'default' (default 'default')
     :arg str subject: Subject for the email, can include variables like
         ${BUILD_NUMBER} or even groovy or javascript code
     :arg str body: Content for the body of the email, can include variables
         like ${BUILD_NUMBER}, but the real magic is using groovy or
         javascript to hook into the Jenkins API itself
     :arg bool attach-build-log: Include build log in the email (default false)
+    :arg str attachments: pattern of files to include as attachment (optional)
+    :arg bool always: Send an email for every result (default false)
     :arg bool unstable: Send an email for an unstable result (default false)
     :arg bool first-failure: Send an email for just the first failure
         (default false)
@@ -1303,29 +1374,25 @@ def email_ext(parser, xml_parent, data):
     :arg bool still-unstable: Send an email if the build is still unstable
         (default false)
     :arg bool pre-build: Send an email before the build (default false)
+    :arg str matrix-trigger: If using matrix projects, when to trigger
 
-    Example::
+        :matrix-trigger values:
+            * **both**
+            * **only-parent**
+            * **only-configurations**
+    :arg list send-to: list of recipients from the predefined groups
 
-      publishers:
-        - email-ext:
-            recipients: foo@example.com, bar@example.com
-            reply-to: foo@example.com
-            subject: Subject for Build ${BUILD_NUMBER}
-            body: The build has finished
-            attach-build-log: false
-            unstable: true
-            first-failure: true
-            not-built: true
-            aborted: true
-            regression: true
-            failure: true
-            improvement: true
-            still-failing: true
-            success: true
-            fixed: true
-            still-unstable: true
-            pre-build: true
+        :send-to values:
+            * **developers** (disabled by default)
+            * **requester** (disabled by default)
+            * **culprits** (disabled by default)
+            * **recipients** (enabled by default)
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/email-ext001.yaml
     """
+
     emailext = XML.SubElement(xml_parent,
                               'hudson.plugins.emailext.ExtendedEmailPublisher')
     if 'recipients' in data:
@@ -1333,6 +1400,8 @@ def email_ext(parser, xml_parent, data):
     else:
         XML.SubElement(emailext, 'recipientList').text = '$DEFAULT_RECIPIENTS'
     ctrigger = XML.SubElement(emailext, 'configuredTriggers')
+    if data.get('always', False):
+        base_email_ext(parser, ctrigger, data, 'AlwaysTrigger')
     if data.get('unstable', False):
         base_email_ext(parser, ctrigger, data, 'UnstableTrigger')
     if data.get('first-failure', False):
@@ -1357,17 +1426,41 @@ def email_ext(parser, xml_parent, data):
         base_email_ext(parser, ctrigger, data, 'StillUnstableTrigger')
     if data.get('pre-build', False):
         base_email_ext(parser, ctrigger, data, 'PreBuildTrigger')
-    XML.SubElement(emailext, 'contentType').text = 'default'
+
+    content_type_mime = {
+        'text': 'text/plain',
+        'html': 'text/html',
+        'default': 'default',
+    }
+    ctype = data.get('content-type', 'default')
+    if ctype not in content_type_mime:
+        raise JenkinsJobsException('email-ext content type must be one of: %s'
+                                   % ', '.join(content_type_mime.keys()))
+    XML.SubElement(emailext, 'contentType').text = content_type_mime[ctype]
+
     XML.SubElement(emailext, 'defaultSubject').text = data.get(
         'subject', '$DEFAULT_SUBJECT')
     XML.SubElement(emailext, 'defaultContent').text = data.get(
         'body', '$DEFAULT_CONTENT')
-    XML.SubElement(emailext, 'attachmentsPattern').text = ''
+    XML.SubElement(emailext, 'attachmentsPattern').text = data.get(
+        'attachments', '')
     XML.SubElement(emailext, 'presendScript').text = ''
     XML.SubElement(emailext, 'attachBuildLog').text = \
         str(data.get('attach-build-log', False)).lower()
     XML.SubElement(emailext, 'replyTo').text = data.get('reply-to',
                                                         '$DEFAULT_RECIPIENTS')
+    matrix_dict = {'both': 'BOTH',
+                   'only-configurations': 'ONLY_CONFIGURATIONS',
+                   'only-parent': 'ONLY_PARENT'}
+    matrix_trigger = data.get('matrix-trigger', None)
+    ## If none defined, then do not create entry
+    if matrix_trigger is not None:
+        if matrix_trigger not in matrix_dict:
+            raise JenkinsJobsException("matrix-trigger entered is not valid, "
+                                       "must be one of: %s" %
+                                       ", ".join(matrix_dict.keys()))
+        XML.SubElement(emailext, 'matrixTriggerMode').text = \
+            matrix_dict.get(matrix_trigger)
 
 
 def fingerprint(parser, xml_parent, data):
@@ -1647,7 +1740,7 @@ def cifs(parser, xml_parent, data):
     :arg bool target-is-date-format: whether target is a date format. If true,
       raw text should be quoted (defaults to False)
     :arg bool clean-remote: should the remote directory be deleted before
-      transfering files (defaults to False)
+      transferring files (defaults to False)
     :arg str source: source path specifier
     :arg str excludes: excluded file pattern (optional)
     :arg str remove-prefix: prefix to remove from uploaded file paths
@@ -1678,6 +1771,21 @@ def cifs(parser, xml_parent, data):
                       publisher_tag,
                       transfer_tag,
                       plugin_reference_tag)
+
+
+def cigame(parser, xml_parent, data):
+    """yaml: cigame
+    This plugin introduces a game where users get points
+    for improving the builds.
+    Requires the Jenkins `The Continuous Integration Game plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/
+    The+Continuous+Integration+Game+plugin>`_
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/cigame.yaml
+    """
+    XML.SubElement(xml_parent, 'hudson.plugins.cigame.GamePublisher')
 
 
 def sonar(parser, xml_parent, data):
@@ -2094,6 +2202,7 @@ def html_publisher(parser, xml_parent, data):
     :arg str dir: HTML directory to archive
     :arg str files: Specify the pages to display
     :arg bool keep-all: keep HTML reports for each past build (Default False)
+    :arg bool allow-missing: Allow missing HTML reports (Default False)
 
 
     Example::
@@ -2104,6 +2213,7 @@ def html_publisher(parser, xml_parent, data):
                 dir: "path/"
                 files: "index.html"
                 keep-all: true
+                allow-missing: true
     """
 
     reporter = XML.SubElement(xml_parent, 'htmlpublisher.HtmlPublisher')
@@ -2114,6 +2224,8 @@ def html_publisher(parser, xml_parent, data):
     XML.SubElement(ptarget, 'reportFiles').text = data['files']
     keep_all = str(data.get('keep-all', False)).lower()
     XML.SubElement(ptarget, 'keepAll').text = keep_all
+    allow_missing = str(data.get('allow-missing', False)).lower()
+    XML.SubElement(ptarget, 'allowMissing').text = allow_missing
     XML.SubElement(ptarget, 'wrapperName').text = "htmlpublisher-wrapper.html"
 
 
@@ -2229,6 +2341,112 @@ def post_tasks(parser, xml_parent, data):
             task.get('script', ''))
 
 
+def postbuildscript(parser, xml_parent, data):
+    """yaml: postbuildscript
+    Executes additional builders, script or Groovy after the build is
+    complete.
+
+    Requires the Jenkins `Post Build Script plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/PostBuildScript+Plugin>`_
+
+    :arg list generic-script: Paths to Batch/Shell scripts
+    :arg list groovy-script: Paths to Groovy scripts
+    :arg list groovy: Inline Groovy
+    :arg list builders: Any supported builders, see :doc:`builders`.
+    :arg bool onsuccess: Scripts and builders are run only if the build succeed
+                         (default False)
+    :arg bool onfailure: Scripts and builders are run only if the build fail
+                         (default True)
+    :arg str execute-on: For matrix projects, scripts can be run after each
+                         axis is built (`axes`), after all axis of the matrix
+                         are built (`matrix`) or after each axis AND the matrix
+                         are built (`both`).
+
+    The `onsuccess` and `onfailure` options are confusing. If you want
+    the post build to always run regardless of the build status, you
+    should set them both to `false`.
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/\
+postbuildscript001.yaml
+
+    You can also execute :doc:`builders </builders>`:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/\
+postbuildscript002.yaml
+
+    Run once after the whole matrix (all axes) is built:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/\
+postbuildscript003.yaml
+
+    """
+
+    pbs_xml = XML.SubElement(
+        xml_parent,
+        'org.jenkinsci.plugins.postbuildscript.PostBuildScript')
+
+    # Shell/Groovy in a file
+    script_types = {
+        'generic': 'GenericScript',
+        'groovy': 'GroovyScriptFile',
+    }
+    for script_type in script_types.keys():
+        if script_type + '-script' not in data:
+            continue
+
+        scripts_xml = XML.SubElement(pbs_xml, script_type + 'ScriptFileList')
+        for shell_scripts in [data.get(script_type + '-script', [])]:
+            for shell_script in shell_scripts:
+                script_xml = XML.SubElement(
+                    scripts_xml,
+                    'org.jenkinsci.plugins.postbuildscript.'
+                    + script_types[script_type])
+                file_path_xml = XML.SubElement(script_xml, 'filePath')
+                file_path_xml.text = shell_script
+
+    # Inlined Groovy
+    if 'groovy' in data:
+        groovy_inline_xml = XML.SubElement(pbs_xml, 'groovyScriptContentList')
+        for groovy in data.get('groovy', []):
+            groovy_xml = XML.SubElement(
+                groovy_inline_xml,
+                'org.jenkinsci.plugins.postbuildscript.GroovyScriptContent'
+            )
+            groovy_content = XML.SubElement(groovy_xml, 'content')
+            groovy_content.text = groovy
+
+    # Inject builders
+    if 'builders' in data:
+        build_steps_xml = XML.SubElement(pbs_xml, 'buildSteps')
+        for builder in data.get('builders', []):
+            parser.registry.dispatch('builder', parser, build_steps_xml,
+                                     builder)
+
+    # When to run the build? Note the plugin let one specify both options
+    # although they are antinomic
+    success_xml = XML.SubElement(pbs_xml, 'scriptOnlyIfSuccess')
+    success_xml.text = str(data.get('onsuccess', True)).lower()
+    failure_xml = XML.SubElement(pbs_xml, 'scriptOnlyIfFailure')
+    failure_xml.text = str(data.get('onfailure', False)).lower()
+
+    # TODO: we may want to avoid setting "execute-on" on non-matrix jobs,
+    # either by skipping this part or by raising an error to let the user know
+    # an attempt was made to set execute-on on a non-matrix job. There are
+    # currently no easy ways to check for this though.
+    if 'execute-on' in data:
+        valid_values = ('matrix', 'axes', 'both')
+        execute_on = data['execute-on'].lower()
+        if execute_on not in valid_values:
+            raise JenkinsJobsException(
+                'execute-on must be one of %s, got %s' %
+                valid_values, execute_on
+            )
+        execute_on_xml = XML.SubElement(pbs_xml, 'executeOn')
+        execute_on_xml.text = execute_on.upper()
+
+
 def xml_summary(parser, xml_parent, data):
     """yaml: xml-summary
     Adds support for the Summary Display Plugin
@@ -2269,7 +2487,7 @@ def robot(parser, xml_parent, data):
     :arg str output-xml: Name of the xml file containing robot output
         (default 'output.xml')
     :arg str pass-threshold: Minimum percentage of passed tests to consider
-        the build succesful (default 0.0)
+        the build successful (default 0.0)
     :arg str unstable-threshold: Minimum percentage of passed test to
         consider the build as not failed (default 0.0)
     :arg bool only-critical: Take only critical tests into account when
@@ -2615,25 +2833,9 @@ def ircbot(parser, xml_parent, data):
             * **only-configurations** (default)
             * **only-parent**
 
-    Example::
+    Example:
 
-      publishers:
-        - ircbot:
-            strategy: all
-            notify-start: false
-            notify-committers: false
-            notify-culprits: false
-            notify-upstream: false
-            notify-fixers: false
-            message-type: summary-scm
-            channels:
-                - name: '#jenkins-channel1'
-                  password: secrete
-                  notify-only: false
-                - name: '#jenkins-channel2'
-                  notify-only: true
-            matrix-notifier: only-configurations
-
+    .. literalinclude:: /../../tests/publishers/fixtures/ircbot001.yaml
     """
     top = XML.SubElement(xml_parent, 'hudson.plugins.ircbot.IrcPublisher')
     message_dict = {'summary-scm': 'DefaultBuildToChatNotifier',
@@ -2680,7 +2882,7 @@ def ircbot(parser, xml_parent, data):
     matrix_dict = {'all': 'ALL',
                    'only-configurations': 'ONLY_CONFIGURATIONS',
                    'only-parent': 'ONLY_PARENT'}
-    matrix = data.get('matrix-notifier', 'only_configurations')
+    matrix = data.get('matrix-notifier', 'only-configurations')
     if matrix not in matrix_dict:
         raise JenkinsJobsException("matrix-notifier entered is not valid, "
                                    "must be one of: %s" %
@@ -3113,6 +3315,33 @@ def description_setter(parser, xml_parent, data):
     XML.SubElement(descriptionsetter, 'setForMatrix').text = for_matrix
 
 
+def doxygen(parser, xml_parent, data):
+    """yaml: doxygen
+    This plugin parses the Doxygen descriptor (Doxyfile) and provides a link to
+    the generated Doxygen documentation.
+
+    Requires the Jenkins `Doxygen Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Doxygen+Plugin>`_
+
+    :arg str doxyfile: The doxyfile path
+    :arg bool keepall: Retain doxygen generation for each successful build
+        (default: false)
+    :arg str folder: Folder where you run doxygen (default: '')
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/doxygen001.yaml
+
+    """
+    p = XML.SubElement(xml_parent, 'hudson.plugins.doxygen.DoxygenArchiver')
+    if not data['doxyfile']:
+        raise JenkinsJobsException("The path to a doxyfile must be specified.")
+    XML.SubElement(p, 'doxyfilePath').text = str(data.get("doxyfile"))
+    XML.SubElement(p, 'keepAll').text = str(data.get("keepall", False)).lower()
+    XML.SubElement(p, 'folderWhereYouRunDoxygen').text = \
+        str(data.get("folder", ""))
+
+
 def sitemonitor(parser, xml_parent, data):
     """yaml: sitemonitor
     This plugin checks the availability of an url.
@@ -3135,6 +3364,170 @@ def sitemonitor(parser, xml_parent, data):
             site = XML.SubElement(sites,
                                   'hudson.plugins.sitemonitor.model.Site')
             XML.SubElement(site, 'mUrl').text = siteurl['url']
+
+
+def testng(parser, xml_parent, data):
+    """yaml: testng
+    This plugin publishes TestNG test reports.
+
+    Requires the Jenkins `TestNG Results Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/testng-plugin>`_
+
+    :arg str pattern: filename pattern to locate the TestNG XML report files
+    :arg bool escape-test-description: escapes the description string
+      associated with the test method while displaying test method details
+      (Default True)
+    :arg bool escape-exception-msg: escapes the test method's exception
+      messages. (Default True)
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/testng001.yaml
+
+    """
+
+    reporter = XML.SubElement(xml_parent, 'hudson.plugins.testng.Publisher')
+    if not data['pattern']:
+        raise JenkinsJobsException("A filename pattern must be specified.")
+    XML.SubElement(reporter, 'reportFilenamePattern').text = data['pattern']
+    XML.SubElement(reporter, 'escapeTestDescp').text = str(data.get(
+        'escape-test-description', True))
+    XML.SubElement(reporter, 'escapeExceptionMsg').text = str(data.get(
+        'escape-exception-msg', True))
+
+
+def artifact_deployer(parser, xml_parent, data):
+    """yaml: artifact-deployer
+    This plugin makes it possible to copy artifacts to remote locations.
+
+    Requires the Jenkins `ArtifactDeployer Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/ArtifactDeployer+Plugin>`_
+
+    :arg list entries:
+        :entries:
+            * **files** (`str`) - files to deploy
+            * **basedir** (`str`) - the dir from files are deployed
+            * **excludes** (`str`) - the mask to exclude files
+            * **remote** (`str`) - a remote output directory
+            * **flatten** (`bool`) - ignore the source directory structure
+              (Default: False)
+            * **delete-remote** (`bool`) - clean-up remote directory
+              before deployment (Default: False)
+            * **delete-remote-artifacts** (`bool`) - delete remote artifacts
+              when the build is deleted (Default: False)
+            * **fail-no-files** (`bool`) - fail build if there are no files
+              (Default: False)
+            * **groovy-script** (`str`) - execute a Groovy script
+              before a build is deleted
+
+    :arg bool deploy-if-fail: Deploy if the build is failed (Default: False)
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/artifact-dep.yaml
+
+    """
+
+    deployer = XML.SubElement(xml_parent,
+                              'org.jenkinsci.plugins.artifactdeployer.'
+                              'ArtifactDeployerPublisher')
+    if data is None or 'entries' not in data:
+        raise Exception('entries field is missing')
+    elif data.get('entries', None) is None:
+        entries = XML.SubElement(deployer, 'entries', {'class': 'empty-list'})
+    else:
+        entries = XML.SubElement(deployer, 'entries')
+        for entry in data.get('entries'):
+            deployer_entry = XML.SubElement(
+                entries,
+                'org.jenkinsci.plugins.artifactdeployer.ArtifactDeployerEntry')
+            XML.SubElement(deployer_entry, 'includes').text = \
+                entry.get('files')
+            XML.SubElement(deployer_entry, 'basedir').text = \
+                entry.get('basedir')
+            XML.SubElement(deployer_entry, 'excludes').text = \
+                entry.get('excludes')
+            XML.SubElement(deployer_entry, 'remote').text = entry.get('remote')
+            XML.SubElement(deployer_entry, 'flatten').text = \
+                str(entry.get('flatten', False)).lower()
+            XML.SubElement(deployer_entry, 'deleteRemote').text = \
+                str(entry.get('delete-remote', False)).lower()
+            XML.SubElement(deployer_entry, 'deleteRemoteArtifacts').text = \
+                str(entry.get('delete-remote-artifacts', False)).lower()
+            XML.SubElement(deployer_entry, 'failNoFilesDeploy').text = \
+                str(entry.get('fail-no-files', False)).lower()
+            XML.SubElement(deployer_entry, 'groovyExpression').text = \
+                entry.get('groovy-script')
+    deploy_if_fail = str(data.get('deploy-if-fail', False)).lower()
+    XML.SubElement(deployer, 'deployEvenBuildFail').text = deploy_if_fail
+
+
+def ruby_metrics(parser, xml_parent, data):
+    """yaml: ruby-metrics
+    Rcov plugin parses rcov html report files and
+    shows it in Jenkins with a trend graph.
+
+    Requires the Jenkins `Ruby metrics plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Ruby+metrics+plugin>`_
+
+    :arg str report-dir: Relative path to the coverage report directory
+    :arg dict targets:
+
+           :targets: (total-coverage, code-coverage)
+
+                * **healthy** (`int`): Healthy threshold
+                * **unhealthy** (`int`): Unhealthy threshold
+                * **unstable** (`int`): Unstable threshold
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/ruby-metrics.yaml
+
+    """
+
+    metrics = XML.SubElement(
+        xml_parent,
+        'hudson.plugins.rubyMetrics.rcov.RcovPublisher')
+    report_dir = data.get('report-dir', '')
+    XML.SubElement(metrics, 'reportDir').text = report_dir
+    targets = XML.SubElement(metrics, 'targets')
+    if 'target' in data:
+        for t in data['target']:
+            if not ('code-coverage' in t or 'total-coverage' in t):
+                raise JenkinsJobsException('Unrecognized target name')
+            el = XML.SubElement(
+                targets,
+                'hudson.plugins.rubyMetrics.rcov.model.MetricTarget')
+            if 'total-coverage' in t:
+                XML.SubElement(el, 'metric').text = 'TOTAL_COVERAGE'
+            else:
+                XML.SubElement(el, 'metric').text = 'CODE_COVERAGE'
+            for threshold_name, threshold_value in t.values()[0].items():
+                elname = threshold_name.lower()
+                XML.SubElement(el, elname).text = str(threshold_value)
+    else:
+        raise JenkinsJobsException('Coverage metric targets must be set')
+
+
+def fitnesse(parser, xml_parent, data):
+    """yaml: fitnesse
+    Publish Fitnesse test results
+
+    Requires the Jenkins `Fitnesse plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Fitnesse+Plugin>`_
+
+    :arg str results: path specifier for results files
+
+    Example:
+
+    .. literalinclude::  /../../tests/publishers/fixtures/fitnesse001.yaml
+
+    """
+    fitnesse = XML.SubElement(
+        xml_parent,
+        'hudson.plugins.fitnesse.FitnesseResultsRecorder')
+    results = data.get('results', '')
+    XML.SubElement(fitnesse, 'fitnessePathToXmlResultsIn').text = results
 
 
 class Publishers(jenkins_jobs.modules.base.Base):

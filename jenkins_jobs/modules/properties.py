@@ -145,29 +145,24 @@ def github(parser, xml_parent, data):
     github_url.text = data['url']
 
 
-def leastload(parser, xml_parent, data):
-    """yaml: leastload
-    Enables the leastload plugin.
+def least_load(parser, xml_parent, data):
+    """yaml: least-load
+    Enables the Least Load Plugin.
     Requires the Jenkins `Least Load Plugin.
-    <https://wiki.jenkins-ci.org/display/JENKINS/
-    Least+Load+Plugin>`_
+    <https://wiki.jenkins-ci.org/display/JENKINS/Least+Load+Plugin>`_
 
     :arg bool disabled: whether or not leastload is disabled (default True)
 
-    Example::
+    Example:
 
-      properties:
-        - leastload:
-            disabled: False
+    .. literalinclude:: /../../tests/properties/fixtures/least-load002.yaml
     """
     least = XML.SubElement(xml_parent,
-                            'org.bstick12.jenkinsci.plugins.leastload.'
-                            'LeastLoadDisabledProperty')
+                           'org.bstick12.jenkinsci.plugins.leastload.'
+                           'LeastLoadDisabledProperty')
 
-    if data.get('disabled') is True:
-        XML.SubElement(least, 'leastLoadDisabled').text = 'true'
-    else:
-        XML.SubElement(least, 'leastLoadDisabled').text = 'false'
+    XML.SubElement(least, 'leastLoadDisabled').text = str(
+        data.get('disabled', True)).lower()
 
 
 def throttle(parser, xml_parent, data):
@@ -463,7 +458,7 @@ def build_blocker(parser, xml_parent, data):
               use-build-blocker: true
               blocking-jobs:
                 - ".*-deploy"
-                - "^maintainance.*"
+                - "^maintenance.*"
     """
     blocker = XML.SubElement(xml_parent,
                              'hudson.plugins.'
@@ -478,6 +473,36 @@ def build_blocker(parser, xml_parent, data):
     for value in data['blocking-jobs']:
         jobs = jobs + value + '\n'
     XML.SubElement(blocker, 'blockingJobs').text = jobs
+
+
+def copyartifact(parser, xml_parent, data):
+    """yaml: copyartifact
+    Specify a list of projects that have access to copy the artifacts of
+    this project.
+
+    Requires the Jenkins `Copy Artifact plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Copy+Artifact+Plugin>`_
+
+    :arg string projects: comma separated list of projects that can copy
+        artifacts of this project. Wild card character '*' is available.
+
+
+    Example:
+
+    .. literalinclude:: \
+            /../../tests/properties/fixtures/copyartifact.yaml
+
+    """
+    copyartifact = XML.SubElement(xml_parent,
+                                  'hudson.plugins.'
+                                  'copyartifact.'
+                                  'CopyArtifactPermissionProperty',
+                                  plugin='copyartifact')
+    if not data or not data.get('projects', None):
+        raise JenkinsJobsException("projects string must exist and "
+                                   "not be empty")
+    projectlist = XML.SubElement(copyartifact, 'projectNameList')
+    XML.SubElement(projectlist, 'string').text = data.get('projects')
 
 
 def batch_tasks(parser, xml_parent, data):
@@ -512,6 +537,102 @@ def batch_tasks(parser, xml_parent, data):
                                     'hudson.plugins.batch__task.BatchTask')
         XML.SubElement(batch_task, 'name').text = task['name']
         XML.SubElement(batch_task, 'script').text = task['script']
+
+
+def heavy_job(parser, xml_parent, data):
+    """yaml: heavy-job
+    This plugin allows you to define "weight" on each job,
+    and making each job consume that many executors
+
+    Requires the Jenkins `Heavy Job Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Heavy+Job+Plugin>`_
+
+    :arg int weight: Specify the total number of executors
+        that this job should occupy (defaults to 1)
+
+
+    Example:
+
+    .. literalinclude:: /../../tests/properties/fixtures/heavy-job.yaml
+
+    """
+    heavyjob = XML.SubElement(xml_parent,
+                              'hudson.plugins.'
+                              'heavy__job.HeavyJobProperty')
+    XML.SubElement(heavyjob, 'weight').text = str(
+        data.get('weight', 1))
+
+
+def slave_utilization(parser, xml_parent, data):
+    """yaml: slave-utilization
+    This plugin allows you to specify the percentage of a slave's capacity a
+    job wants to use.
+
+    Requires the Jenkins `Slave Utilization Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Slave+Utilization+Plugin>`_
+
+    :arg int slave-percentage: Specify the percentage of a slave's execution
+        slots that this job should occupy (default: 0)
+    :arg bool single-instance-per-slave: Control whether concurrent instances
+        of this job will be permitted to run in parallel on a single slave
+        (default: False)
+
+    Example:
+
+    .. literalinclude:: \
+            /../../tests/properties/fixtures/slave-utilization1.yaml
+    """
+    utilization = XML.SubElement(
+        xml_parent, 'com.suryagaddipati.jenkins.SlaveUtilizationProperty')
+    percent = int(data.get('slave-percentage', 0))
+    XML.SubElement(utilization, 'needsExclusiveAccessToNode'
+                   ).text = 'true' if percent else 'false'
+    XML.SubElement(utilization, 'slaveUtilizationPercentage'
+                   ).text = str(percent)
+    XML.SubElement(utilization, 'singleInstancePerSlave').text = str(
+        data.get('single-instance-per-slave', False)).lower()
+
+
+def delivery_pipeline(parser, xml_parent, data):
+    """yaml: delivery-pipeline
+    Requires the Jenkins `Delivery Pipeline Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Delivery+Pipeline+Plugin>`_
+
+    :arg str stage: Name of the stage for this job (default: '')
+    :arg str task: Name of the task for this job (default: '')
+
+    Example:
+
+    .. literalinclude:: \
+            /../../tests/properties/fixtures/delivery-pipeline1.yaml
+
+    """
+    pipeline = XML.SubElement(xml_parent,
+                              'se.diabol.jenkins.pipeline.'
+                              'PipelineProperty')
+    XML.SubElement(pipeline, 'stageName').text = data.get('stage', '')
+    XML.SubElement(pipeline, 'taskName').text = data.get('task', '')
+
+
+def zeromq_event(parser, xml_parent, data):
+    """yaml: zeromq-event
+    This is a Jenkins plugin that will publish Jenkins Job run events
+    (start, complete, finish) to a ZMQ PUB socket.
+
+    Requires the Jenkins `ZMQ Event Publisher.
+    <https://git.openstack.org/cgit/openstack-infra/zmq-event-publisher>`_
+
+    Example:
+
+    .. literalinclude:: \
+            /../../tests/properties/fixtures/zeromq-event.yaml
+
+    """
+
+    zmq_event = XML.SubElement(xml_parent,
+                               'org.jenkinsci.plugins.'
+                               'ZMQEventPublisher.HudsonNotificationProperty')
+    XML.SubElement(zmq_event, 'enabled').text = 'true'
 
 
 class Properties(jenkins_jobs.modules.base.Base):

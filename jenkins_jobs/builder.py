@@ -15,6 +15,7 @@
 
 # Manage jobs in Jenkins server
 
+import errno
 import os
 import sys
 import hashlib
@@ -35,9 +36,9 @@ logger = logging.getLogger(__name__)
 MAGIC_MANAGE_STRING = "<!-- Managed by Jenkins Job Builder -->"
 
 
-# Python 2.6's minidom toprettyxml produces broken output by adding extraneous
-# whitespace around data. This patches the broken implementation with one taken
-# from 2.7
+# Python <= 2.7.3's minidom toprettyxml produces broken output by adding
+# extraneous whitespace around data. This patches the broken implementation
+# with one taken from Python > 2.7.3.
 def writexml(self, writer, indent="", addindent="", newl=""):
     # indent = current indentation
     # addindent = indentation to add to higher levels
@@ -66,7 +67,7 @@ def writexml(self, writer, indent="", addindent="", newl=""):
     else:
         writer.write("/>%s" % (newl))
 
-if sys.hexversion < 0x02070000:
+if sys.version_info[:3] <= (2, 7, 3):
     minidom.Element.writexml = writexml
 
 
@@ -79,7 +80,11 @@ def deep_format(obj, paramdict):
     # example, is problematic).
     if isinstance(obj, str):
         try:
-            ret = obj.format(**paramdict)
+            result = re.match('^{obj:(?P<key>\w+)}$', obj)
+            if result is not None:
+                ret = paramdict[result.group("key")]
+            else:
+                ret = obj.format(**paramdict)
         except KeyError as exc:
             missing_key = exc.message
             desc = "%s parameter missing to format %s\nGiven: %s" % (
@@ -113,13 +118,19 @@ def matches(what, where):
 
 class YamlParser(object):
     def __init__(self, config=None):
-        self.registry = ModuleRegistry(config)
         self.data = {}
         self.jobs = []
+        self.config = config
+        self.registry = ModuleRegistry(self.config)
 
-    def parse(self, fn):
-        data = yaml.load(open(fn))
+    def parse_fp(self, fp):
+        data = yaml.load(fp)
         if data:
+            if not isinstance(data, list):
+                raise JenkinsJobsException(
+                    "The topmost collection in file '{fname}' must be a list,"
+                    " not a {cls}".format(fname=getattr(fp, 'name', fp),
+                                          cls=type(data)))
             for item in data:
                 cls, dfn = item.items()[0]
                 group = self.data.get(cls, {})
@@ -136,6 +147,10 @@ class YamlParser(object):
                 name = dfn['name']
                 group[name] = dfn
                 self.data[cls] = group
+
+    def parse(self, fn):
+        with open(fn) as fp:
+            self.parse_fp(fp)
 
     def getJob(self, name):
         job = self.data.get('job', {}).get(name, None)
@@ -275,8 +290,18 @@ class YamlParser(object):
 
     def getXMLForJob(self, data):
         kind = data.get('project-type', 'freestyle')
-        data["description"] = (data.get("description", "") +
-                               self.get_managed_string()).lstrip()
+        if self.config:
+            keep_desc = self.config.getboolean('job_builder',
+                                               'keep_descriptions')
+        else:
+            keep_desc = False
+        if keep_desc:
+            description = data.get("description", None)
+        else:
+            description = data.get("description", '')
+        if description is not None:
+            data["description"] = description + \
+                self.get_managed_string().lstrip()
         for ep in pkg_resources.iter_entry_points(
                 group='jenkins_jobs.projects', name=kind):
             Mod = ep.load()
@@ -335,7 +360,7 @@ class ModuleRegistry(object):
 
         :arg string component_type: the name of the component
           (e.g., `builder`)
-        :arg YAMLParser parser: the global YMAL Parser
+        :arg YAMLParser parser: the global YAML Parser
         :arg Element xml_parent: the parent XML element
         :arg dict template_data: values that should be interpolated into
           the component definition
@@ -506,13 +531,19 @@ class Builder(object):
         self.ignore_cache = ignore_cache
 
     def load_files(self, fn):
+        self.parser = YamlParser(self.global_config)
+
+        if hasattr(fn, 'read'):
+            self.parser.parse_fp(fn)
+            return
+
         if os.path.isdir(fn):
             files_to_process = [os.path.join(fn, f)
                                 for f in os.listdir(fn)
                                 if (f.endswith('.yml') or f.endswith('.yaml'))]
         else:
             files_to_process = [fn]
-        self.parser = YamlParser(self.global_config)
+
         for in_file in files_to_process:
             logger.debug("Parsing YAML file {0}".format(in_file))
             self.parser.parse(in_file)
@@ -548,8 +579,8 @@ class Builder(object):
         for job in jobs:
             self.delete_job(job['name'])
 
-    def update_job(self, fn, names=None, output_dir=None):
-        self.load_files(fn)
+    def update_job(self, input_fn, names=None, output=None):
+        self.load_files(input_fn)
         self.parser.generateXML(names)
 
         self.parser.jobs.sort(lambda a, b: cmp(a.name, b.name))
@@ -557,13 +588,32 @@ class Builder(object):
         for job in self.parser.jobs:
             if names and not matches(job.name, names):
                 continue
-            if output_dir:
-                if names:
-                    print job.output()
+            if output:
+                if hasattr(output, 'write'):
+                    # `output` is a file-like object
+                    logger.debug("Writing XML to '{0}'".format(output))
+                    try:
+                        output.write(job.output())
+                    except IOError as exc:
+                        if exc.errno == errno.EPIPE:
+                            # EPIPE could happen if piping output to something
+                            # that doesn't read the whole input (e.g.: the UNIX
+                            # `head` command)
+                            return
+                        raise
                     continue
-                fn = os.path.join(output_dir, job.name)
-                logger.debug("Writing XML to '{0}'".format(fn))
-                f = open(fn, 'w')
+
+                output_dir = output
+
+                try:
+                    os.makedirs(output_dir)
+                except OSError:
+                    if not os.path.isdir(output_dir):
+                        raise
+
+                output_fn = os.path.join(output_dir, job.name)
+                logger.debug("Writing XML to '{0}'".format(output_fn))
+                f = open(output_fn, 'w')
                 f.write(job.output())
                 f.close()
                 continue

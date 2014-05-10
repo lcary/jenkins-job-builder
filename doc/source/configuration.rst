@@ -123,6 +123,12 @@ define a template that you can use to create jobs with a `Project`_
 definition.  It's name will depend on what is supplied to the
 `Project`_.
 
+If you want to use lists or dicts variables you can use ``{obj:key}``.
+
+For example:
+
+.. literalinclude::  /../../tests/yamlparser/fixtures/custom_distri.yaml
+
 .. _project:
 
 Project
@@ -145,6 +151,22 @@ with those values.  The example above would create the job called
 
 The ``jobs:`` list can also allow for specifying job-specific
 substitutions as follows::
+
+  - job-template:
+      name: '{name}-unit-tests'
+      builders:
+        - shell: unittest
+      publishers:
+        - email:
+            recipients: '{mail-to}'
+
+  - job-template:
+      name: '{name}-perf-tests'
+      builders:
+        - shell: perftest
+      publishers:
+        - email:
+            recipients: '{mail-to}'
 
   - project:
       name: project-name
