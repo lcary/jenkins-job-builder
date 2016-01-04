@@ -183,10 +183,25 @@ class YamlParser(object):
         if defaults == {} and whichdefaults != 'global':
             raise JenkinsJobsException("Unknown defaults set: '{0}'"
                                        .format(whichdefaults))
-        newdata = {}
-        newdata.update(defaults)
-        newdata.update(data)
-        return newdata
+        return recursive_merge(data, defaults)
+
+    def recursive_merge(d1, d2):
+        """
+        Recursively merge dictionary d2 into dictionary d1. Merge logic behaves
+        like this:
+
+        * If a key exists in d1 only, it will be kept and its value won't change.
+        * If a key exists in d2 only, it will be added to d1 as well.
+        * If a key exists in both dictionaries, it depends:
+            * If the values in both dictionaries are also dictionaries,
+            recursively call this function to merge them.
+            * Otherwise, the value of d2 will be used to override the value in d1
+        """
+        for key in d2.keys():
+            if key in d1 and isinstance(d1[key], dict) and isinstance(d2[key], dict):
+                recursive_merge(d1[key], d2[key])
+            else:
+                d1[key] = d2[key]
 
     def generateXML(self, jobs_filter=None):
         changed = True
