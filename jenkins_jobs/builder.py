@@ -178,14 +178,18 @@ class YamlParser(object):
         return self.applyDefaults(job)
 
     def applyDefaults(self, data):
+        from pprint import pprint
+        import pdb
+        #pdb.set_trace()
         whichdefaults = data.get('defaults', 'global')
         defaults = self.data.get('defaults', {}).get(whichdefaults, {})
         if defaults == {} and whichdefaults != 'global':
             raise JenkinsJobsException("Unknown defaults set: '{0}'"
                                        .format(whichdefaults))
-        return recursive_merge(data, defaults)
+        self.recursive_merge_dict(data, defaults)
+        return data
 
-    def recursive_merge(d1, d2):
+    def recursive_merge_dict(self, d1, d2):
         """
         Recursively merge dictionary d2 into dictionary d1. Merge logic behaves
         like this:
@@ -198,10 +202,20 @@ class YamlParser(object):
             * Otherwise, the value of d2 will be used to override the value in d1
         """
         for key in d2.keys():
-            if key in d1 and isinstance(d1[key], dict) and isinstance(d2[key], dict):
-                recursive_merge(d1[key], d2[key])
+            if key in d1:
+                if isinstance(d1[key], dict) and isinstance(d2[key], dict):
+                    self.recursive_merge_dict(d1[key], d2[key])
+                elif isinstance(d1[key], list) and isinstance(d2[key], list):
+                    self.recursive_merge_list(d1[key], d2[key])
+                # otherwise, nothing to do, d1[key] will be preserved
             else:
+                # this is a new key in d2, so add it to d1 as well
                 d1[key] = d2[key]
+
+    def recursive_merge_list(self, lst1, lst2):
+        for element in lst2:
+            if element not in lst1:
+                lst1.append(element)
 
     def generateXML(self, jobs_filter=None):
         changed = True
