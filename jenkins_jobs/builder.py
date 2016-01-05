@@ -178,15 +178,27 @@ class YamlParser(object):
         return self.applyDefaults(job)
 
     def applyDefaults(self, data):
+        data = self.applyDefaultsLocal(data)
+        return self.applyDefaultsGlobal(data)
+
+    def applyDefaultsLocal(self, data):
+        local_defaults = data.get('defaults')
+        if local_defaults:
+            defaults = self.data.get('defaults', {}).get(local_defaults, {})
+            newdata = {}
+            newdata.update(defaults)
+            newdata.update(data)
+            return newdata
+        else:
+            return data
+
+    def applyDefaultsGlobal(self, data):
         from pprint import pprint
         import pdb
         #pdb.set_trace()
-        whichdefaults = data.get('defaults', 'global')
-        defaults = self.data.get('defaults', {}).get(whichdefaults, {})
-        if defaults == {} and whichdefaults != 'global':
-            raise JenkinsJobsException("Unknown defaults set: '{0}'"
-                                       .format(whichdefaults))
-        self.recursive_merge_dict(data, defaults)
+        global_defaults = self.data.get('defaults', {}).get('global', {})
+        if global_defaults:
+            self.recursive_merge_dict(data, global_defaults)
         return data
 
     def recursive_merge_dict(self, d1, d2):
