@@ -178,10 +178,14 @@ class YamlParser(object):
         return self.applyDefaults(job)
 
     def applyDefaults(self, data):
+        """Apply local defaults first, then global defaults."""
         data = self.applyDefaultsLocal(data)
         return self.applyDefaultsGlobal(data)
 
     def applyDefaultsLocal(self, data):
+        """Local defaults are applied forcefully, ie if a key exists in both the
+        local data and the default dict, the value in the local data will be
+        used to override the value in the default dict."""
         local_defaults = data.get('defaults')
         if local_defaults:
             defaults = self.data.get('defaults', {}).get(local_defaults, {})
@@ -193,9 +197,14 @@ class YamlParser(object):
             return data
 
     def applyDefaultsGlobal(self, data):
-        from pprint import pprint
-        import pdb
-        #pdb.set_trace()
+        """Global defaults are merged, ie if a key exists in both the
+        local data and the default dict, the value in the default dict will be
+        merged into the local data.
+
+        Rationale: we want to define certain things that are applied to all the
+        jobs. For example, we want the 'console-log-periodic' publisher to be
+        applied to every job. The merging logic allows this publiser to be
+        merged into the existing publishers defined by a job already."""
         global_defaults = self.data.get('defaults', {}).get('global', {})
         if global_defaults:
             self.recursive_merge_dict(data, global_defaults)
