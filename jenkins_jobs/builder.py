@@ -178,15 +178,65 @@ class YamlParser(object):
         return self.applyDefaults(job)
 
     def applyDefaults(self, data):
-        whichdefaults = data.get('defaults', 'global')
-        defaults = self.data.get('defaults', {}).get(whichdefaults, {})
-        if defaults == {} and whichdefaults != 'global':
-            raise JenkinsJobsException("Unknown defaults set: '{0}'"
-                                       .format(whichdefaults))
-        newdata = {}
-        newdata.update(defaults)
-        newdata.update(data)
-        return newdata
+        """Apply local defaults first, then global defaults."""
+        data = self.applyDefaultsLocal(data)
+        return self.applyDefaultsGlobal(data)
+
+    def applyDefaultsLocal(self, data):
+        """Local defaults are applied forcefully, ie if a key exists in both the
+        local data and the default dict, the value in the local data will be
+        used to override the value in the default dict."""
+        local_defaults = data.get('defaults')
+        if local_defaults:
+            defaults = self.data.get('defaults', {}).get(local_defaults, {})
+            newdata = {}
+            newdata.update(defaults)
+            newdata.update(data)
+            return newdata
+        else:
+            return data
+
+    def applyDefaultsGlobal(self, data):
+        """Global defaults are merged, ie if a key exists in both the
+        local data and the default dict, the value in the default dict will be
+        merged into the local data.
+
+        Rationale: we want to define certain things that are applied to all the
+        jobs. For example, we want the 'console-log-periodic' publisher to be
+        applied to every job. The merging logic allows this publiser to be
+        merged into the existing publishers defined by a job already."""
+        global_defaults = self.data.get('defaults', {}).get('global', {})
+        if global_defaults:
+            self.recursive_merge_dict(data, global_defaults)
+        return data
+
+    def recursive_merge_dict(self, d1, d2):
+        """
+        Recursively merge dictionary d2 into dictionary d1. Merge logic behaves
+        like this:
+
+        * If a key exists in d1 only, it will be kept and its value won't change.
+        * If a key exists in d2 only, it will be added to d1 as well.
+        * If a key exists in both dictionaries, it depends:
+            * If the values in both dictionaries are also dictionaries,
+            recursively call this function to merge them.
+            * Otherwise, the value of d2 will be used to override the value in d1
+        """
+        for key in d2.keys():
+            if key in d1:
+                if isinstance(d1[key], dict) and isinstance(d2[key], dict):
+                    self.recursive_merge_dict(d1[key], d2[key])
+                elif isinstance(d1[key], list) and isinstance(d2[key], list):
+                    self.recursive_merge_list(d1[key], d2[key])
+                # otherwise, nothing to do, d1[key] will be preserved
+            else:
+                # this is a new key in d2, so add it to d1 as well
+                d1[key] = d2[key]
+
+    def recursive_merge_list(self, lst1, lst2):
+        for element in lst2:
+            if element not in lst1:
+                lst1.append(element)
 
     def generateXML(self, jobs_filter=None):
         changed = True
